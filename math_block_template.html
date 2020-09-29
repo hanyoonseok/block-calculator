@@ -1,0 +1,675 @@
+﻿<!doctype html>
+<html lang="ko">
+<head>
+	<meta charset="utf-8" />
+	<title>Direct Manipulation of Math Symbols</title>
+</head>
+
+<body>
+    <!-- script 불러오기 -->
+    <script src='https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js' type='text/javascript'></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/2.4.6/fabric.min.js" type="text/javascript"></script>
+    <script src="js/math.min.js" type="text/javascript"></script>
+
+    <!-- canvas 생성 -->
+    <canvas id="c" width="1024" height="768">
+        Canvas not supported
+    </canvas>
+
+    <!-- 주요 기능 구현 -->
+    <script>
+        const parser = math.parser();
+
+        const SYMBOL_WIDTH = 50;
+        const SYMBOL_HEIGHT = 50;
+        const img_path = "js/images/";
+        let MathApp = {};
+
+        // 삭제(delete), 수행(run), 분리(separate), 복사(copy) 기호 추가
+        MathApp.symbol_paths = {
+                '+':    "add",
+                '-':    "sub",
+                '*':    "mul",
+                '/':    "div",
+                '(':    "parenthesis_open",
+                ')':    "parenthesis_close",
+                '[':    "squarebracket_open",
+                ']':    "squarebracket_close",
+                '{':    "curlybrace_open",
+                '}':    "curlybrace_close",
+                '.':    "period",
+                ',':    "comma",
+                ':':    "colon",
+                ';':    "semicolon",
+                '=':    "equal",
+                '>':    "more",
+                '<':    "less",
+                '!':    "exclamation",
+                "delete"    : "delete",
+                "run"       : "run",
+                "separate"  : "separate",
+                "copy"      : "copy"
+        };
+
+        // App 클래스에 대한 변수들을 초기화 한다.
+        MathApp.blocks = [];
+        MathApp.selected_block = null;
+
+        MathApp.is_mouse_dragging = false;
+        MathApp.mouse_drag_prev = {x:0, y:0};
+
+        // Block Type을 초기화 한다.
+        MathApp.block_types = {
+            UNDEFINED:  "undefind",
+            SYMBOL:     "symbol",
+        };
+
+        // Block 선택 시 나타나는 대화상자를 초기화한다.
+        MathApp.options = ["delete", "run", "separate", "copy"];
+        // 대화상자의 block 들이 들어갈 변수를 초기화한다.
+        MathApp.options_symbol = [];
+
+        // App 초기화 함수 구현
+        MathApp.initialize = function () {
+            // 숫자 0~9 입력 시 동작 - 숫자 블럭 생성
+            for(let i=0; i <= 9; i++)
+            {
+                let key = i.toString();
+                let value = key;
+                this.symbol_paths[key] = value;
+            }
+
+            // 문자 a부터 z까지 입력 시 동작 - 문자 블럭 생성
+            for(let c="a".charCodeAt(0); c <= "z".charCodeAt(0); c++)
+            {
+                let key = String.fromCharCode(c);
+                let value = key;
+                this.symbol_paths[key] = value;
+            }
+
+            // 캔버스 배경 설정 및 캔버스 초기화
+            this.canvas = new fabric.Canvas("c", {
+                backgroundColor: "#eee",
+                hoverCursor: "default",
+                selection: false
+            });
+
+            // 키 입력 이벤트 핸들러 설정
+            $(document).keypress(function(event) {
+                let key = String.fromCharCode(event.which);
+                MathApp.handleKeyPress(key);
+            });
+
+            // 마우스 클릭(down - up) 이벤트 설정
+            $(document).mousedown(function(event) {
+                let p = {x: event.pageX, y: event.pageY};
+                MathApp.handleMouseDown(p);
+            });
+            $(document).mouseup(function(event) {
+                let p = {x: event.pageX, y: event.pageY};
+                MathApp.handleMouseUp(p);
+            });
+
+            // 마우스 이동 이벤트 설정
+            $(document).mousemove(function(event) {
+                let p = {x: event.pageX, y: event.pageY};
+                MathApp.handleMouseMove(p);
+            });
+        }
+
+        // 키입력 핸들러 함수 구현
+        MathApp.handleKeyPress = function(key) {
+            if (key in this.symbol_paths)
+            {
+                // 키 입력 시 생성할 블럭의 크기
+                let size = {
+                    width : SYMBOL_WIDTH,
+                    height : SYMBOL_HEIGHT
+                };
+                // 키입력 시 생성할 블럭의 위치를 임의로 설정한다.
+                let position = {
+                    x : Math.random() * (this.canvas.width-size.width) + size.width/2,
+                    y : Math.random() * (this.canvas.height-size.height) + size.height/2
+                };
+
+                let new_symbol = new MathApp.Symbol(position, size, key);
+                return new_symbol; // 새로운 symbol을 반환한다.
+            }
+        }
+
+        // 마우스 누른 상태 이벤트 핸들러 구현
+        MathApp.handleMouseDown = function(window_p) {
+            if(MathApp.isInCanvas(window_p))
+            {
+                let canvas_p = MathApp.transformToCanvasCoords(window_p);
+                let previous_selected_block = null; // 이전 선택 블럭을 저장해놓는다.
+                // 이미 선택되어 있는 블럭이 있으면 이전으로 옮기고 선택 취소.
+                if( MathApp.selected_block != null )
+                {
+                    previous_selected_block = MathApp.selected_block;
+
+                    MathApp.selected_block.onDeselected();
+                    MathApp.selected_block = null;
+                }
+
+                // canvas에서 블럭을 찾고, 블럭이 있으면 선택한다.
+                let block = MathApp.findBlockOn(canvas_p);
+                if (block != null) {
+                    // 블럭을 선택하면, 대화형 인터페이스를 띄운다.
+                    if (MathApp.options.includes(block.name)) {
+                        // 이전에 선택된 블럭이 있다면 인터페이스를 지우고, 새로운 블럭을 선택 한다.
+                        if (previous_selected_block != null) {
+                            MathApp.deleteOption();
+                            MathApp.selectOption(previous_selected_block, block);
+                        }
+                    }
+                    else {
+                        // 이전 선택된 블럭이 없다면 인터페이스를 지우고 새로 생성
+                        MathApp.deleteOption();
+                        MathApp.newOp(block);
+                        MathApp.selected_block = block;
+                        MathApp.selected_block.onSelected();
+                    }
+                }
+                else {
+                    // 블럭이 없으면 대화형 인터페이스를 닫는다..
+                    MathApp.deleteOption();
+                }
+
+                // 선택된 블럭이 있을 때만 drag를 킨다.
+                if (MathApp.selected_block != null || MathApp.previous_selected_block != null) {
+                    MathApp.is_mouse_dragging = true;
+                    MathApp.mouse_drag_prev = canvas_p;
+                }
+                MathApp.canvas.requestRenderAll();
+            }
+            else // no is in canvas
+            {
+                // 캔버스 밖 -> 팝업을 초기화하고, drag도 끈다.
+                MathApp.deleteOption();
+                MathApp.is_mouse_dragging = false;
+                MathApp.mouse_drag_prev = {x:0, y:0};
+            }
+        }
+				MathApp.handleMouseMove = function (window_p) {
+            // 드래그 상태에서 블럭 이동을 처리한다.
+            if(MathApp.is_mouse_dragging) // 드래그 상태
+            {
+                let canvas_p = MathApp.transformToCanvasCoords(window_p);
+                if(MathApp.selected_block != null)
+                {
+                    let tx = canvas_p.x - MathApp.mouse_drag_prev.x;
+                    let ty = canvas_p.y - MathApp.mouse_drag_prev.y;
+                    MathApp.selected_block.translate({ x: tx, y: ty });
+                    // 대화식 팝업(버튼 4개)는 선택된 블록과 같이 이동해야 함
+                    for (let i = 0; i < 4; i++) {
+                        MathApp.options_symbol[i].translate({
+                            x: tx, y: ty
+                        });
+                    }
+                }
+                MathApp.mouse_drag_prev = canvas_p;
+
+                MathApp.canvas.requestRenderAll();
+            }
+        }
+
+        // 마우스 버튼을 땠을 때 이벤트 핸들러
+        MathApp.handleMouseUp = function (window_p) {
+            // 드래그 상태일 때 마우스를 땠을 때 이벤트를 처리
+            if(MathApp.is_mouse_dragging)
+            {
+                let canvas_p = MathApp.transformToCanvasCoords(window_p);
+
+                MathApp.is_mouse_dragging = false;
+                MathApp.mouse_drag_prev = { x: 0, y: 0 };
+
+                // 마우스 클릭이 끝나는 순간, 겹치는 부분이 있을 때 합친다.
+                let block = MathApp.Combine(MathApp.findOverlapBlock(MathApp.selected_block), MathApp.selected_block);
+                if (block != null) {
+                    let p = {
+                        x: block.position.x,
+                        y: block.position.y
+                    };
+                    MathApp.handleMouseDown(p);
+                    MathApp.is_mouse_dragging = false;
+                }
+
+                MathApp.canvas.requestRenderAll();
+            }
+        }
+
+        // 대화형 인터페이스를 생성하는 함수 구현
+        MathApp.newOp = function (block) {
+            if (block == null) {
+                return null;
+            }
+            // 대화상자에서 생성할 심볼의 갯수(=4)만큼 컨트롤을 초기화 해준다.
+            for (let i = 0; i < MathApp.options.length; i++) {
+                // 대화형 인터페이스의 크기와 위치를 설정
+                let size = { width: 20, height: 20 };
+                let position = {
+                    //x: block.position.x - 15 + i * 20,
+                    x: block.position.x - block.size.width / 2  + i * 20 + 10,
+                    y: block.position.y + block.size.height / 2 + 15
+                };
+
+                // 리스트로 관리
+                let new_dlg_symbol = new MathApp.Symbol(position, size, MathApp.options[i], true); // delete, run, seperate, copy 생ㅅ성
+                MathApp.options_symbol.push(new_dlg_symbol);
+            }
+
+            MathApp.canvas.requestRenderAll();
+        }
+
+        // 대화형 인터페이스 선택 이벤트
+        MathApp.selectOption = function (btn_selected, btn) {
+            // 선택된 블럭이 없으면 없음
+            if (btn_selected == null || btn == null)
+                return null;
+
+            let new_btn = null; // 선택된 새로운 블럭
+
+            // 실행 블럭 수행
+            if (btn.name == "run") {
+                try {
+                    let result = String(parser.eval(btn_selected.name)); //인자로 전달받은 블럭의 이름에 해당하는 수식 계산을 저장
+                    if (result.substring(0, 8) == "function") //수식선언이면 function으로 출력
+                        result = "function";
+
+                    // 계산 후 블럭을 생성한다.
+                    new_btn = MathApp.makeResult(btn_selected, result);
+                }
+                catch (e) {
+                    alert(e);
+                    console.log(e);
+                }
+            }
+            // 삭제 블럭 수행
+            else if (btn.name == "delete") {
+                // 대화형 인터페이스와 블럭 자체를 삭제
+                MathApp.deleteOption();
+                btn_selected.destroy();
+            }
+            // 복사 블럭 수행
+            else if (btn.name == "copy") {
+                // 동일한 블럭을 생성한다.
+                new_block = MathApp.makeResult(btn_selected, btn_selected.name);
+            }
+            // 분리 블럭 수행
+            else if (btn.name == "separate") {
+                // 하나의 블럭을 분리하여 각 블럭을 다시 생성한다.
+                for (let i = 0; i < btn_selected.name.length; i++) {
+                    let size = {
+                        width: SYMBOL_WIDTH,
+                        height: SYMBOL_HEIGHT
+                    };
+                    let position = {
+                        x: btn_selected.position.x + (size.width + 7) * i - btn_selected.size.width / 2,
+                        y: btn_selected.position.y
+                    };
+
+                    let symbol_new = new MathApp.Symbol(position, size, btn_selected.name[i]); //각각의 블록들에 대해서 새로운 단일 블록으로 재 생성
+                }
+                // 합쳐져있던 블럭을 지운다.
+                btn_selected.destroy();
+            }
+            // 정의되지 않은 버튼 수행 시 에러
+            else {
+                alert('not define button event');
+                console.log('not define button ERROR');
+            }
+
+            MathApp.canvas.requestRenderAll();
+
+            // 블럭이 새로운 위치에 생성되었으면, 생성된 블럭을 활성화
+            if (new_btn != null) {
+                MathApp.handleMouseDown({
+                    x: new_btn.position.x,
+                    y: new_btn.position.y
+                });
+                MathApp.is_mouse_dragging = false;
+            }
+            return new_btn;
+        }
+        // 복사또는 계산 버튼을 눌렀을 때 블럭을 생성하는 함수
+        MathApp.makeResult = function (btn_selected, names) {
+            let result_block = []; // 결과 블럭 저장 위치
+            for (let i = 0; i < names.length; i++) {
+                // 만들어질 크기와 위치 지정
+                let size = {
+                    width: SYMBOL_WIDTH,
+                    height: SYMBOL_HEIGHT
+                };
+                let position = {
+                    x: btn_selected.position.x + size.width * i - SYMBOL_WIDTH / 2,
+                    y: btn_selected.position.y + size.height + SYMBOL_HEIGHT / 2
+                };
+
+                // 블럭 저장
+                result_block.push(new MathApp.Symbol(position, size, names[i]));
+            }
+
+            // 기준점이 되는 block을 설정한다.
+            let main_block = result_block[0];
+            let visual_block_items = [];
+            setTimeout(() => { // 타이밍 문제로 잘못된 결과 나올 수 있어서 timeout 설정
+                for (let i = result_block.length - 1; i >= 0; i--) {
+                    for (let j = 0; j < result_block[i].visual_items.length; j++) {
+                        visual_block_items.push(result_block[i].visual_items[j]);
+                    }
+                }
+                visual_block_items[visual_block_items.length - 1].width = SYMBOL_WIDTH * result_block.length;
+
+                main_block.name = names;
+                main_block.position.x = main_block.position.x + SYMBOL_WIDTH/2 * (result_block.length - 1);
+                main_block.size.width = main_block.size.width + SYMBOL_WIDTH * (result_block.length - 1);
+
+                main_block.visual_items = visual_block_items;
+
+                for (let i = result_block.length - 1; i > 0; i--) {
+                    // 하나의 main 블럭이 생성되면, 기준의 낱개 블럭을 삭제한다.
+                    result_block[i].destroy();
+                }
+                MathApp.canvas.requestRenderAll();
+
+                MathApp.handleMouseDown({
+                    x: main_block.position.x,
+                    y: main_block.position.y
+                });
+                MathApp.is_mouse_dragging = false;
+
+                return main_block;
+            }, 300);
+        }
+
+        // 대화형 인터페이스 창 삭제하는 함수
+        MathApp.deleteOption = function () {
+            // 대화형 인터페이스 블럭을 리스트에서 삭제하여 화면에서 지운다.
+            for (let i = MathApp.blocks.length - 1; i >= 0; i--) {
+                if (MathApp.options.includes(MathApp.blocks[i].name)) {
+                    MathApp.blocks[i].destroy();
+                }
+            }
+            MathApp.options_symbol = [];
+            MathApp.canvas.requestRenderAll();
+        }
+
+        // 마우스 이동 이벤트 핸들러
+
+
+        // 블럭을 합치는 함수
+        MathApp.Combine = function (block, selected_block) {
+            if (selected_block == null || block == null || MathApp.options.includes(block.name)) {
+                return null;
+            }
+
+            // 선택된 블럭 초기화
+            if (MathApp.selected_block != null) {
+                MathApp.selected_block.onDeselected();
+                MathApp.selected_block = null;
+            }
+
+            // 겹치는 블럭의 원소를 반대로 설정
+            block.visual_items.reverse();
+            selected_block.visual_items.reverse();
+
+            // 원소들을 돌면서 붙인다.
+            let k = block.visual_items.length - selected_block.visual_items.length;
+            if (k >= 0) {
+                for (let i = 0; i < selected_block.visual_items.length; i++) {
+                    selected_block.visual_items[i].left = block.visual_items[k + i].left + selected_block.size.width;
+                    selected_block.visual_items[i].top = block.visual_items[i].top;
+                    block.visual_items.push(selected_block.visual_items[i]);
+                }
+            }
+            else {
+                for (let i = 0; i < selected_block.visual_items.length; i++) {
+                    selected_block.visual_items[i].left = block.visual_items[i].left + block.size.width;
+                    selected_block.visual_items[i].top = block.visual_items[i].top;
+                    block.visual_items.push(selected_block.visual_items[i]);
+                }
+            }
+
+            try {
+                block.visual_items[0].width += selected_block.size.width;
+            }
+            catch (e) {
+                console.log("Error : " + e);
+                alert(e);
+            }
+
+            // 원소를 다시 뒤집고 위치 설정
+            block.visual_items.reverse();
+
+            block.position.x += selected_block.size.width / 2;
+            block.size.width += selected_block.size.width;
+            block.name += selected_block.name;
+
+            // 합치기 전 블럭을 지운다.
+            selected_block.destroy();
+            MathApp.canvas.requestRenderAll();
+
+            return block;
+        }
+
+        // canvas 변형 조정 기본 함수
+        MathApp.transformToCanvasCoords = function(window_p) {
+            let rect = MathApp.canvas.getElement().getBoundingClientRect();
+            let canvas_p = {
+                x : window_p.x - rect.left,
+                y : window_p.y - rect.top
+            };
+            return canvas_p;
+        }
+
+        // canvas 내부 판단 함수
+        MathApp.isInCanvas = function(window_p) {
+            let rect = MathApp.canvas.getElement().getBoundingClientRect();
+            if( window_p.x >= rect.left &&
+                window_p.x < rect.left + rect.width &&
+                window_p.y >= rect.top &&
+                window_p.y < rect.top + rect.height )
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        // block을 찾는 함수
+        MathApp.findBlockOn = function(canvas_p) {
+            let x = canvas_p.x;
+            let y = canvas_p.y;
+
+            for(let i=0; i < this.blocks.length; i++)
+            {
+                let block = this.blocks[i];
+
+                if( x >= block.position.x - block.size.width/2 &&
+                    x <= block.position.x + block.size.width/2 &&
+                    y >= block.position.y - block.size.height/2 &&
+                    y <= block.position.y + block.size.height/2 )
+                {
+                    return block;
+                }
+            }
+            return null;
+        }
+
+        // 겹치는 부분을 찾는 함수
+        MathApp.findOverlapBlock = function (selected_block) {
+            if (selected_block != null) { //선택된 블록이 있으면
+                let x = selected_block.position.x;
+                let y = selected_block.position.y;
+
+                // 선택된 블럭을 기준으로 겹치는 부분을 찾는다.
+                for (let i = 0; i < this.blocks.length; i++) {
+                    let block = this.blocks[i];
+
+                    if (block != selected_block) {
+                        if (Math.abs(x - block.position.x) <= (block.size.width + selected_block.size.width) / 2 &&
+                            Math.abs(y - block.position.y) <= (block.size.height + selected_block.size.height) / 2) {
+                            return block;
+                        } // end if
+                    } // end if
+                } // end for
+            } // end if
+            return null;
+        }
+
+        // Block 데이터를 생성. 관리할 수 있게 blocks 리스트에 들어간다.
+        MathApp.Block = function(position, size) {
+            this.position = position;
+            this.size = size;
+            this.type = MathApp.block_types.UNDEFINED;
+
+            this.visual_items = [];
+
+            MathApp.blocks.push(this);
+        }
+
+        // 선택 취소 -> 파란색 테두리
+        MathApp.Block.prototype.onDeselected = function() {
+            this.visual_items[this.visual_items.length-1].set({
+                stroke: "rgba(0,0,255,1)"
+            });
+        }
+
+        // 선택 상태 -> 빨간색 테두리
+        MathApp.Block.prototype.onSelected = function() {
+            this.visual_items[this.visual_items.length-1].set({
+                stroke: "rgba(255,0,0,1)"
+            });
+
+            this.visual_items.forEach(item => {
+                MathApp.canvas.bringToFront(item);
+            });
+        }
+
+        // canvas prototype moveTo
+        MathApp.Block.prototype.moveTo = function(p) {
+            let tx = p.x - this.position.x;
+            let ty = p.y - this.position.y;
+
+            this.translate({x: tx, y: ty});
+        }
+
+        // canvas prototype translate
+        MathApp.Block.prototype.translate = function(v) {
+            this.position.x += v.x;
+            this.position.y += v.y;
+
+            this.visual_items.forEach(item => {
+                item.left += v.x;
+                item.top += v.y;
+            });
+        }
+
+        // canvas prototype destroy
+        MathApp.Block.prototype.destroy = function() {
+            if(this == MathApp.selected_block)
+            {
+                MathApp.selected_block = null;
+                this.onDeselected();
+            }
+
+            this.visual_items.forEach(item => {
+                MathApp.canvas.remove(item);
+            });
+            this.visual_items = [];
+
+            let index = MathApp.blocks.indexOf(this);
+            if(index > -1)
+            {
+                MathApp.blocks.splice(index, 1);
+            }
+        }
+
+        // 블럭 기호를 생성한다. isPop이 true이면, 대화형 인터페이스 기호를 생성한다.
+        MathApp.Symbol = function(position, size, name, isPop) {
+            MathApp.Block.call(this, position, size);
+            this.type = MathApp.block_types.SYMBOL;
+            this.name = name;
+
+            let block = this;
+
+            if (name in MathApp.symbol_paths)
+            {
+                let path = img_path + MathApp.symbol_paths[name] + ".jpg";
+                fabric.Image.fromURL(path, function (img) {
+                    // (0) Background
+                    let background = new fabric.Rect({
+                        left: position.x - size.width / 2,
+                        top: position.y - size.height / 2,
+                        width: size.width,
+                        height: size.height,
+                        fill: "rgba(255,255,255,1)",
+                        stroke: "rgba(0,0,0,0)",
+                        selectable: false
+                    });
+
+                    // (1) Image
+                    img.scaleToWidth(size.width);
+                    img.scaleToHeight(size.height);
+
+                    let img_w = img.getScaledWidth();
+                    let img_h = img.getScaledHeight();
+
+                    img.set({
+                        left: position.x - img_w / 2,
+                        top: position.y - img_h / 2,
+                        selectable: false
+                    });
+
+                    // (2) Boundary
+                    let cStrokeWidth = 5;
+                    if (isPop) {
+                        cStrokeWidth = 0;
+                    }
+                    let boundary = new fabric.Rect({
+                        left: position.x - size.width/2,
+                        top: position.y - size.height/2,
+                        width: size.width,
+                        height: size.height,
+                        fill: "rgba(0,0,0,0)",
+                        stroke: "rgba(0,0,255,1)",
+                        strokeWidth: cStrokeWidth,
+                        selectable: false
+                    });
+
+                    //
+                    MathApp.canvas.add(background);
+                    MathApp.canvas.add(img);
+                    MathApp.canvas.add(boundary);
+
+                    //
+                    block.visual_items.push(background);
+                    block.visual_items.push(img);
+                    block.visual_items.push(boundary);
+                });
+            }
+            // 블럭 반환
+            return block;
+        }
+
+        // 블럭을 생성한다.
+        MathApp.createBlock = function (position, size, name) {
+            for (let i = name.length - 1; i >= 0; i--) {
+                new MathApp.Symbol(position, size, name[i]);
+            }
+        }
+
+        MathApp.Symbol.prototype = Object.create(MathApp.Block.prototype);
+
+        // 페이지 준비 - 초기화
+        $(document).ready(function()
+        {
+            MathApp.initialize();
+        });
+    </script>
+
+</body>
+</html>
